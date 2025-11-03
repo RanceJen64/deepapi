@@ -66,6 +66,7 @@ class DeepThinkEngine:
         self.enable_parallel_check = enable_parallel_check
         self.llm_params = llm_params or {}
         self._task = None  # 用于存储当前任务，以便取消
+        print(f"DeepThinkEngine init, enable_planning: {self.enable_planning}")
     
     def _get_model_for_stage(self, stage: str) -> str:
         """获取特定阶段的模型"""
