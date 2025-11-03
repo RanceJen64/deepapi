@@ -198,6 +198,8 @@ SELF_IMPROVEMENT_PROMPT = """Review and refine your story output. Focus on:
 - POV/时态稳定性和知识边界
 - 情感弧线连贯性和节奏
 - 角色声音保真度和措辞适当性
+- 时间顺序和先后关系正确
+- 人物物理特征及行为合理
 
 **文笔层面：**
 - 具体描写胜于抽象标签；减少陈词滥调和过度使用的隐喻
@@ -354,7 +356,7 @@ Review the creative writing work or analysis above. Generate your **Summary** (a
 - 文笔是否具体生动，还是充斥陈词滥调
 - 是"展示"还是"告知"
 
-如果是审查分析而非创作本身，评估分析是否正确识别了上述问题。
+审查创作本身，评估分析是否识别了上述问题。
 
 Follow the structure and standards from the instructions."""
 

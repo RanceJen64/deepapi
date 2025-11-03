@@ -462,11 +462,12 @@ async def chat_completions(
                 llm_params=llm_params,
             )
             result = await engine.run()
-            response_text = result.summary or result.final_solution
+            #response_text = result.summary or result.final_solution
+            response_text = result.final_solution
             
             # 如果启用 summary_think,生成推理内容
-            if model_config.has_summary_think:
-                reasoning_text = generate_simple_thinking_tag("deepthink")
+            #if model_config.has_summary_think:
+            #    reasoning_text = generate_simple_thinking_tag("deepthink")
         
         # 构建响应
         request_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"

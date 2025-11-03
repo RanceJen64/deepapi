@@ -18,7 +18,7 @@ Python 版本的 Deep Think 推理引擎 API，提供 OpenAI 兼容的接口，�
 
 ```bash
 cd deepapi
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 ```
 
 ### 2. 配置

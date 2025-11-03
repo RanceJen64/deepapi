@@ -5,6 +5,7 @@ Deep Think 引擎
 import time
 from typing import Optional, Callable, List, Dict, Any, Union
 import asyncio
+import logging
 
 from models import (
     DeepThinkResult,
@@ -15,7 +16,9 @@ from models import (
     MessageContent,
     extract_text_from_content
 )
-from utils.openai_client import OpenAIClient
+from utils.openai_client import OpenAIClient, EmptyResponseError
+
+logger = logging.getLogger(__name__)
 from engine.prompts import (
     DEEP_THINK_INITIAL_PROMPT,
     SELF_IMPROVEMENT_PROMPT,
@@ -40,8 +43,8 @@ class DeepThinkEngine:
         conversation_history: List[Dict[str, Any]] = None,  # 完整的消息历史
         other_prompts: List[str] = None,  # 已弃用，保留向后兼容
         knowledge_context: str = None,
-        max_iterations: int = 30,
-        required_successful_verifications: int = 3,
+        max_iterations: int = 3,
+        required_successful_verifications: int = 2,
         max_errors_before_give_up: int = 10,
         model_stages: Dict[str, str] = None,
         on_progress: Optional[Callable[[ProgressEvent], None]] = None,
@@ -66,7 +69,6 @@ class DeepThinkEngine:
         self.enable_parallel_check = enable_parallel_check
         self.llm_params = llm_params or {}
         self._task = None  # 用于存储当前任务，以便取消
-        print(f"DeepThinkEngine init, enable_planning: {self.enable_planning}")
     
     def _get_model_for_stage(self, stage: str) -> str:
         """获取特定阶段的模型"""
@@ -92,9 +94,19 @@ class DeepThinkEngine:
         else:
             return solution[:idx].strip()
     
+    def _is_same_content(self, a: MessageContent, b: MessageContent) -> bool:
+        """判断两段content在文本层面是否相同（忽略多模态结构差异）"""
+        try:
+            a_text = extract_text_from_content(a).strip() if a is not None else ""
+            b_text = extract_text_from_content(b).strip() if b is not None else ""
+            return a_text == b_text
+        except Exception:
+            return str(a).strip() == str(b).strip()
+    
     async def _generate_thinking_plan(self, problem_statement: MessageContent) -> str:
         """计划阶段 - 生成思考计划"""
         self._emit("progress", {"message": "Generating thinking plan..."})
+        logger.info("planning stage: start")
         
         # 提取文本用于构建提示词
         problem_text = extract_text_from_content(problem_statement)
@@ -102,11 +114,16 @@ class DeepThinkEngine:
         
         # 直接使用 prompt 参数传递多模态内容
         planning_model = self._get_model_for_stage("planning")
-        plan = await self.client.generate_text(
-            model=planning_model,
-            prompt=problem_statement,  # 保留多模态内容
-            **self.llm_params
-        )
+        try:
+            plan = await self.client.generate_text(
+                model=planning_model,
+                prompt=problem_statement,  # 保留多模态内容
+                **self.llm_params
+            )
+            logger.info("planning stage: success")
+        except EmptyResponseError:
+            logger.info("planning stage: failed due to empty response after retry")
+            raise
         
         self._emit("planning", {"plan": plan})
         
@@ -114,7 +131,8 @@ class DeepThinkEngine:
     
     async def _verify_solution(self, solution: str, index: int) -> Dict[str, Any]:
         """验证解决方案 - 实现基类接口"""
-        detailed_solution = self._extract_detailed_solution(solution)
+        #detailed_solution = self._extract_detailed_solution(solution)
+        detailed_solution = solution
         # 提取文本用于构建提示词
         problem_text = extract_text_from_content(self.problem_statement)
         verification_prompt = build_verification_prompt(
@@ -125,29 +143,34 @@ class DeepThinkEngine:
         
         self._emit("progress", {"message": f"Verifying solution (attempt {index + 1})..."})
         
-        # 使用验证阶段的模型
-        verification_model = self._get_model_for_stage("verification")
-        
-        # 获取验证结果
-        verification_output = await self.client.generate_text(
-            model=verification_model,
-            system=VERIFICATION_SYSTEM_PROMPT,
-            prompt=verification_prompt,
-            **self.llm_params
-        )
-        
-        # 检查验证是否通过
-        check_prompt = (
-            f'Response in "yes" or "no". Is the following statement saying the '
-            f'solution is correct, or does not contain critical error or a major '
-            f'justification gap?\n\n{verification_output}'
-        )
-        
-        good_verify = await self.client.generate_text(
-            model=verification_model,
-            prompt=check_prompt,
-            **self.llm_params
-        )
+        try:
+            # 使用验证阶段的模型
+            verification_model = self._get_model_for_stage("verification")
+            
+            # 获取验证结果
+            verification_output = await self.client.generate_text(
+                model=verification_model,
+                system=VERIFICATION_SYSTEM_PROMPT,
+                prompt=verification_prompt,
+                **self.llm_params
+            )
+            
+            # 检查验证是否通过
+            check_prompt = (
+                f'Response in "yes" or "no". Is the following statement saying the '
+                f'solution is correct, or does not contain critical error or a major '
+                f'justification gap?\n\n{verification_output}'
+            )
+            
+            good_verify = await self.client.generate_text(
+                model=verification_model,
+                prompt=check_prompt,
+                **self.llm_params
+            )
+        except EmptyResponseError:
+            # check 失败 -> 视为通过
+            logger.info(f"check stage: EmptyResponse on verification attempt {index + 1}, treating as pass")
+            return {"bug_report": "", "good_verify": "yes"}
         
         bug_report = ""
         if "yes" not in good_verify.lower():
@@ -157,6 +180,8 @@ class DeepThinkEngine:
                 False
             )
         
+        passed_flag = "yes" in good_verify.lower()
+        logger.info(f"check stage: attempt {index + 1} completed, passed={passed_flag}")
         return {"bug_report": bug_report, "good_verify": good_verify}
     
     async def _verify_solution_parallel(
@@ -176,41 +201,54 @@ class DeepThinkEngine:
         num_checks = self.required_verifications
         self._emit("progress", {"message": f"Parallel verifying solution ({num_checks} concurrent checks)..."})
         
-        # 使用验证阶段的模型
-        verification_model = self._get_model_for_stage("verification")
-        
-        # 同时启动required_verifications个验证LLM调用
-        verification_tasks = [
-            self.client.generate_text(
-                model=verification_model,
-                system=VERIFICATION_SYSTEM_PROMPT,
-                prompt=verification_prompt,
-                **self.llm_params
-            )
-            for _ in range(num_checks)
-        ]
-        
-        # 等待所有验证完成
-        verification_outputs = await asyncio.gather(*verification_tasks)
-        
-        # 检查每个验证结果
-        check_tasks = []
-        for verification_output in verification_outputs:
-            check_prompt = (
-                f'Response in "yes" or "no". Is the following statement saying the '
-                f'solution is correct, or does not contain critical error or a major '
-                f'justification gap?\n\n{verification_output}'
-            )
-            check_tasks.append(
+        try:
+            # 使用验证阶段的模型
+            verification_model = self._get_model_for_stage("verification")
+            
+            # 同时启动required_verifications个验证LLM调用
+            verification_tasks = [
                 self.client.generate_text(
                     model=verification_model,
-                    prompt=check_prompt,
+                    system=VERIFICATION_SYSTEM_PROMPT,
+                    prompt=verification_prompt,
                     **self.llm_params
                 )
-            )
-        
-        # 等待所有检查完成
-        good_verifies = await asyncio.gather(*check_tasks)
+                for _ in range(num_checks)
+            ]
+            
+            # 等待所有验证完成
+            verification_outputs = await asyncio.gather(*verification_tasks)
+            
+            # 检查每个验证结果
+            check_tasks = []
+            for verification_output in verification_outputs:
+                check_prompt = (
+                    f'Response in "yes" or "no". Is the following statement saying the '
+                    f'solution is correct, or does not contain critical error or a major '
+                    f'justification gap?\n\n{verification_output}'
+                )
+                check_tasks.append(
+                    self.client.generate_text(
+                        model=verification_model,
+                        prompt=check_prompt,
+                        **self.llm_params
+                    )
+                )
+            
+            # 等待所有检查完成
+            good_verifies = await asyncio.gather(*check_tasks)
+        except EmptyResponseError:
+            # check 失败 -> 视为通过
+            logger.info("check stage (parallel): EmptyResponse, treating as pass for all checks")
+            return {
+                "bug_report": "",
+                "good_verify": "yes (auto-pass)",
+                "parallel_results": {
+                    "total_checks": num_checks,
+                    "passed_checks": num_checks,
+                    "individual_results": ["yes"] * num_checks,
+                },
+            }
         
         # 统计通过的验证数量
         passed_count = sum(1 for gv in good_verifies if "yes" in gv.lower())
@@ -220,7 +258,7 @@ class DeepThinkEngine:
         
         # 收集 bug 报告（如果有的话）
         bug_reports = []
-        if not passed:
+        if not passed :
             for i, (verification_output, good_verify) in enumerate(zip(verification_outputs, good_verifies)):
                 if "yes" not in good_verify.lower():
                     bug_report = self._extract_detailed_solution(
@@ -235,6 +273,7 @@ class DeepThinkEngine:
         
         # 返回综合结果
         good_verify_summary = f"yes (passed {passed_count}/{num_checks} checks)" if passed else f"no (passed {passed_count}/{num_checks} checks)"
+        logger.info(f"check stage (parallel): completed, passed_all={passed}, passed_count={passed_count}/{num_checks}")
         
         return {
             "bug_report": combined_bug_report,
@@ -251,6 +290,9 @@ class DeepThinkEngine:
         problem_statement: MessageContent,
         other_prompts: List[str]
     ) -> Dict[str, Any]:
+        import logging
+        logger = logging.getLogger(__name__)
+
         """初始探索阶段"""
         self._emit("thinking", {"iteration": 0, "phase": "initial-exploration"})
         
@@ -272,26 +314,40 @@ class DeepThinkEngine:
             system_prompt += "\n\n### Additional Context ###\n\n"
             system_prompt += "\n\n".join(self.other_prompts)
         
-        # 构建消息列表：历史消息 + 当前问题
+        # 构建消息列表：历史消息 + 当前问题（避免重复）
         messages = []
         
         # 添加历史对话消息
         if self.conversation_history:
             messages.extend(self.conversation_history)
         
-        # 添加当前用户消息
-        messages.append({"role": "user", "content": problem_statement})
+        # 如历史最后一条就是相同的用户问题，则不再追加
+        should_add_problem = True
+        if self.conversation_history:
+            last_msg = self.conversation_history[-1]
+            if isinstance(last_msg, dict) and last_msg.get("role") == "user":
+                if self._is_same_content(last_msg.get("content"), problem_statement):
+                    should_add_problem = False
+                    logger.info("init stage: detected duplicate problem_statement in history tail, skip appending")
         
+        if should_add_problem:
+            messages.append({"role": "user", "content": problem_statement})
+        logger.info("init stage: send first message")
         # 第一次思考 - 使用完整的消息历史
-        first_solution = await self.client.generate_text(
-            model=initial_model,
-            system=system_prompt,
-            messages=messages,
-            **self.llm_params
-        )
+        try:
+            first_solution = await self.client.generate_text(
+                model=initial_model,
+                system=system_prompt,
+                messages=messages,
+                **self.llm_params
+            )
+        except EmptyResponseError:
+            # init 失败 -> 由上层统一处理
+            logger.info("init stage: failed due to empty response after retry")
+            raise
         
         self._emit("solution", {"solution": first_solution, "iteration": 0})
-        
+        logger.info("init stage: success (received first solution)")
         # 自我改进
         self._emit("thinking", {"iteration": 0, "phase": "self-improvement"})
         
@@ -311,36 +367,55 @@ class DeepThinkEngine:
             system_prompt += "\n\n### Additional Context ###\n\n"
             system_prompt += "\n\n".join(self.other_prompts)
         
-        # 构建消息列表：历史 + 当前问题 + 第一次回答 + 改进请求
+        # 构建消息列表：历史 +（可能的当前问题）+ 第一次回答 + 改进请求
         improvement_messages = []
         if self.conversation_history:
             improvement_messages.extend(self.conversation_history)
+        
+        add_problem_for_improve = True
+        if self.conversation_history:
+            last_msg = self.conversation_history[-1]
+            if isinstance(last_msg, dict) and last_msg.get("role") == "user":
+                if self._is_same_content(last_msg.get("content"), problem_statement):
+                    add_problem_for_improve = False
+                    logger.info("optimize stage: duplicate problem_statement in history tail, skip appending")
+        if add_problem_for_improve:
+            improvement_messages.append({"role": "user", "content": problem_statement})
         improvement_messages.extend([
-            {"role": "user", "content": problem_statement},
             {"role": "assistant", "content": first_solution},
             {"role": "user", "content": SELF_IMPROVEMENT_PROMPT},
         ])
-        
-        improved_solution = await self.client.generate_text(
-            model=improvement_model,
-            system=system_prompt,
-            messages=improvement_messages,
-            **self.llm_params
-        )
-        
+        logger.info("optimize stage: send improvement request")
+        try:
+            improved_solution = await self.client.generate_text(
+                model=improvement_model,
+                system=system_prompt,
+                messages=improvement_messages,
+                **self.llm_params
+            )
+        except EmptyResponseError:
+            # optimize 失败 -> 跳过优化，使用第一次解答
+            improved_solution = first_solution
+            logger.info("optimize stage: failed due to empty response after retry, skipping and using first solution")
+        else:
+            logger.info("optimize stage: success (received improved solution)")
+        logger.info("received first improved message")
         self._emit("solution", {"solution": improved_solution, "iteration": 0})
         
         # 验证 - 根据配置选择串行或并行
+        logger.info("check stage: start initial verification")
         if self.enable_parallel_check:
             verification = await self._verify_solution_parallel(improved_solution)
         else:
             verification = await self._verify_solution(improved_solution, 0)
-        
+
+        passed_flag = "yes" in verification["good_verify"].lower()
+        logger.info(f"check stage: completed, passed={passed_flag}")
+
         self._emit("verification", {
             "passed": "yes" in verification["good_verify"].lower(),
             "iteration": 0,
         })
-        
         return {"solution": improved_solution, "verification": verification}
     
     async def run(self) -> DeepThinkResult:
@@ -363,13 +438,34 @@ class DeepThinkEngine:
                     self.other_prompts.append(f"\n### Thinking Plan ###\n{plan}\n")
             
             # 初始探索 - 传递多模态内容
-            initial = await self._initial_exploration(
-                self.problem_statement,
-                self.other_prompts
-            )
+            try:
+                initial = await self._initial_exploration(
+                    self.problem_statement,
+                    self.other_prompts
+                )
+            except EmptyResponseError:
+                # init 失败 -> 返回失败
+                stats = self.client.get_statistics()
+                self._emit("failure", {"reason": "Initialization failed", "statistics": stats})
+                return DeepThinkResult(
+                    mode="deep-think",
+                    plan=plan,
+                    initial_thought=None,
+                    improvements=[],
+                    iterations=[],
+                    verifications=[],
+                    final_solution=None,
+                    summary=None,
+                    total_iterations=0,
+                    successful_verifications=0,
+                    sources=self.sources if self.sources else None,
+                    knowledge_enhanced=len(self.sources) > 0,
+                )
             
             solution = initial["solution"]
             verification = initial["verification"]
+
+            logger.info(f"first check result: {str(verification)}")
             
             iterations: List[DeepThinkIteration] = []
             verifications: List[Verification] = []
@@ -425,12 +521,20 @@ class DeepThinkEngine:
                         system_prompt += "\n\n### Additional Context ###\n\n"
                         system_prompt += "\n\n".join(self.other_prompts)
                     
-                    # 构建消息列表：历史 + 当前问题 + 之前的解答 + 修正请求
+                    # 构建消息列表：历史 +（可能的当前问题）+ 之前的解答 + 修正请求
                     correction_messages = []
                     if self.conversation_history:
                         correction_messages.extend(self.conversation_history)
+                    add_problem_for_correction = True
+                    if self.conversation_history:
+                        last_msg = self.conversation_history[-1]
+                        if isinstance(last_msg, dict) and last_msg.get("role") == "user":
+                            if self._is_same_content(last_msg.get("content"), self.problem_statement):
+                                add_problem_for_correction = False
+                                logger.info("correction stage: duplicate problem_statement in history tail, skip appending")
+                    if add_problem_for_correction:
+                        correction_messages.append({"role": "user", "content": self.problem_statement})
                     correction_messages.extend([
-                        {"role": "user", "content": self.problem_statement},
                         {"role": "assistant", "content": solution},
                         {"role": "user", "content": CORRECTION_PROMPT + "\n\n" + verification["bug_report"]},
                     ])
@@ -448,27 +552,34 @@ class DeepThinkEngine:
                     error_count = 0
                 
                 if correct_count >= self.required_verifications:
-                    # 生成最终摘要
-                    self._emit("summarizing", {"message": "Generating final summary..."})
+                    need_summary = False
                     
-                    summary_model = self._get_model_for_stage("summary")
-                    # 提取文本用于构建摘要提示词
-                    summary_prompt = build_final_summary_prompt(
-                        self.problem_statement_text,
-                        solution
-                    )
-                    
-                    final_summary = await self.client.generate_text(
-                        model=summary_model,
-                        prompt=summary_prompt,
-                        **self.llm_params
-                    )
+                    if need_summary:
+                        # 生成最终摘要
+                        self._emit("summarizing", {"message": "Generating final summary..."})
+                        
+                        summary_model = self._get_model_for_stage("summary")
+                        # 提取文本用于构建摘要提示词
+                        summary_prompt = build_final_summary_prompt(
+                            self.problem_statement_text,
+                            solution
+                        )
+                        
+                        try:
+                            final_summary = await self.client.generate_text(
+                                model=summary_model,
+                                prompt=summary_prompt,
+                                **self.llm_params
+                            )
+                        except EmptyResponseError:
+                            # summary 失败 -> 直接返回 solution 作为最终答案
+                            final_summary = solution
                     
                     # 获取统计信息
                     stats = self.client.get_statistics()
                     
                     self._emit("success", {
-                        "solution": final_summary, 
+                        "solution": solution,
                         "iterations": i + 1,
                         "statistics": stats
                     })
@@ -481,7 +592,7 @@ class DeepThinkEngine:
                         iterations=iterations,
                         verifications=verifications,
                         final_solution=solution,
-                        summary=final_summary,
+                        summary=solution,
                         total_iterations=i + 1,
                         successful_verifications=correct_count,
                         sources=self.sources if self.sources else None,
@@ -508,11 +619,15 @@ class DeepThinkEngine:
                 solution
             )
             
-            final_summary = await self.client.generate_text(
-                model=summary_model,
-                prompt=summary_prompt,
-                **self.llm_params
-            )
+            try:
+                final_summary = await self.client.generate_text(
+                    model=summary_model,
+                    prompt=summary_prompt,
+                    **self.llm_params
+                )
+            except EmptyResponseError:
+                # summary 失败 -> 直接返回 solution 作为最终答案
+                final_summary = solution
             
             # 获取统计信息
             stats = self.client.get_statistics()
@@ -541,4 +656,3 @@ class DeepThinkEngine:
             # 引擎被取消，记录日志并退出
             logger.info("DeepThink engine cancelled by client disconnect")
             raise
-

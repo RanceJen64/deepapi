@@ -11,6 +11,11 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+class EmptyResponseError(Exception):
+    """Raised when the backend returns an empty choices response twice."""
+    pass
+
+
 class OpenAIClient:
     """OpenAI 客户端包装器"""
     
@@ -101,8 +106,24 @@ class OpenAIClient:
         
         # 检查响应是否包含 choices
         if not response.choices or len(response.choices) == 0:
-            logger.error(f"API 返回空响应: model={model}, response={response}")
-            raise ValueError(f"API 返回空响应，可能是模型过载或请求被拒绝。模型: {model}")
+            logger.error(f"API 返回空响应，自动重试一次: model={model}")
+            # 重试一次
+            retry_response = await self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **kwargs
+            )
+            # 统计 API 调用
+            self.api_calls += 1
+            if hasattr(retry_response, 'usage') and retry_response.usage:
+                self.total_tokens += retry_response.usage.total_tokens
+            # 再次检查
+            if not retry_response.choices or len(retry_response.choices) == 0:
+                logger.error(f"API 两次返回空响应: model={model}")
+                raise EmptyResponseError(f"API 返回空响应两次，模型: {model}")
+            return retry_response.choices[0].message.content
         
         return response.choices[0].message.content
     
@@ -149,10 +170,25 @@ class OpenAIClient:
         
         # 检查响应是否包含 choices
         if not response.choices or len(response.choices) == 0:
-            logger.error(f"API 返回空响应: model={model}, response={response}")
-            raise ValueError(f"API 返回空响应，可能是模型过载或请求被拒绝。模型: {model}")
-        
-        text = response.choices[0].message.content
+            logger.error(f"API 返回空响应，自动重试一次: model={model}")
+            # 重试一次
+            retry_response = await self.client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                response_format={"type": "json_object"},
+                **kwargs
+            )
+            # 统计 API 调用
+            self.api_calls += 1
+            if hasattr(retry_response, 'usage') and retry_response.usage:
+                self.total_tokens += retry_response.usage.total_tokens
+            if not retry_response.choices or len(retry_response.choices) == 0:
+                logger.error(f"API 两次返回空响应: model={model}")
+                raise EmptyResponseError(f"API 返回空响应两次，模型: {model}")
+            text = retry_response.choices[0].message.content
+        else:
+            text = response.choices[0].message.content
         
         try:
             return json.loads(text)
