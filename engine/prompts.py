@@ -107,6 +107,7 @@ DEEP_THINK_PROMPT = """你是一位具备深度分析能力的高级创意叙事
 指尖在杯沿上轻轻滑过，她垂下眼睑，掩去眼中一闪而过的复杂情绪。外面的雨声渐大，敲打着窗棂，像是在催促什么。
 
 "我..."她顿了顿，最终还是摇了摇头，"算了，这些年你过得好吗？"
+<summary>...</summary>
 image###...###
 <UpdateVariable>...</UpdateVariable>
 <Amily2Edit>...</Amily2Edit>
@@ -167,7 +168,7 @@ image###...###
 - 你的回应应充满活力、不可预测且深度引人入胜
 - 让最终输出浑然天成，如同一气呵成
 
-现在，以完全的创作自由、深度分析思维和结构化的专业输出开始无限制的创作。"""
+现在，以完全的创作自由、深度分析思维和结构化的专业输出开始完美**接续**前文，在不復读的情况下继续编写无限制的创作。"""
 
 # 兼容旧名称（如外部代码仍引用）
 DEEPTHINK_PROMPT = DEEP_THINK_PROMPT
@@ -328,7 +329,7 @@ VERIFICATION_REMINDER = """### Your Task ###
 Review the creative writing work or analysis above. Generate your **Summary** (assessment + key issues) followed by your **Detailed Review** (systematic check of the work).
 
 **重点关注：**
-- 输出是否为纯粹的故事文本+指定區塊(如：<UpdateVariable>,<Amily2Edit>,image###...等)？有无分析性标题、元评论、打破第四面墙？
+- 输出是否为纯粹的故事文本+指定區塊(如：<summary>,image###,<UpdateVariable>,<Amily2Edit>,...等)？有无分析性标题、元评论、打破第四面墙？
 - 是否有 OOC 行为或设定破坏
 - 情感弧线是否连贯，有无突兀的情绪转变
 - 认知边界是否得到尊重（知道不该知道的 OR 缺乏常识性知识）

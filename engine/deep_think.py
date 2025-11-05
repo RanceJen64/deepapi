@@ -410,7 +410,7 @@ class DeepThinkEngine:
             verification = await self._verify_solution(improved_solution, 0)
 
         passed_flag = "yes" in verification["good_verify"].lower()
-        logger.info(f"check stage: completed, passed={passed_flag}")
+        logger.info(f"check stage: completed, passed={passed_flag}, result={str(verification)}")
 
         self._emit("verification", {
             "passed": "yes" in verification["good_verify"].lower(),
@@ -608,6 +608,8 @@ class DeepThinkEngine:
                     "passed": "yes" in verification["good_verify"].lower(),
                     "iteration": i + 1,
                 })
+                logger.info(f"check stage: completed, result={str(verification)}")
+
             
             # 失败 - 仍然生成摘要
             self._emit("summarizing", {"message": "Generating final summary..."})
