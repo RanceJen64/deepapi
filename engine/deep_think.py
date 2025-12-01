@@ -51,6 +51,10 @@ class DeepThinkEngine:
         enable_planning: bool = False,
         enable_parallel_check: bool = False,
         llm_params: Optional[Dict[str, Any]] = None,
+        # 新增：按提供商路由的客户端与阶段提供商映射
+        clients_by_provider: Optional[Dict[str, OpenAIClient]] = None,
+        default_provider_id: Optional[str] = None,
+        provider_stages: Optional[Dict[str, str]] = None,
     ):
         self.client = client
         self.model = model
@@ -69,10 +73,38 @@ class DeepThinkEngine:
         self.enable_parallel_check = enable_parallel_check
         self.llm_params = llm_params or {}
         self._task = None  # 用于存储当前任务，以便取消
+        # 多提供商支持
+        self.clients_by_provider = clients_by_provider or {}
+        self.default_provider_id = default_provider_id
+        self.provider_stages = provider_stages or {}
     
     def _get_model_for_stage(self, stage: str) -> str:
         """获取特定阶段的模型"""
         return self.model_stages.get(stage, self.model)
+
+    def _get_client_for_stage(self, stage: str) -> OpenAIClient:
+        """根据阶段选择对应提供商的客户端，默认回退为初始化客户端"""
+        provider_id = self.provider_stages.get(stage, self.default_provider_id)
+        if provider_id and provider_id in self.clients_by_provider:
+            return self.clients_by_provider[provider_id]
+        return self.client
+
+    def _aggregate_statistics(self) -> Dict[str, int]:
+        """聚合所有客户端统计信息"""
+        seen = set()
+        api_calls = 0
+        total_tokens = 0
+        # 包含主客户端
+        all_clients = list(self.clients_by_provider.values()) if self.clients_by_provider else []
+        all_clients.append(self.client)
+        for c in all_clients:
+            if id(c) in seen:
+                continue
+            seen.add(id(c))
+            stats = c.get_statistics()
+            api_calls += stats.get("api_calls", 0)
+            total_tokens += stats.get("total_tokens", 0)
+        return {"api_calls": api_calls, "total_tokens": total_tokens}
     
     def _emit(self, event_type: str, data: Dict[str, Any]):
         """发送进度事件"""
@@ -115,7 +147,8 @@ class DeepThinkEngine:
         # 直接使用 prompt 参数传递多模态内容
         planning_model = self._get_model_for_stage("planning")
         try:
-            plan = await self.client.generate_text(
+            client = self._get_client_for_stage("planning")
+            plan = await client.generate_text(
                 model=planning_model,
                 prompt=problem_statement,  # 保留多模态内容
                 **self.llm_params
@@ -148,7 +181,8 @@ class DeepThinkEngine:
             verification_model = self._get_model_for_stage("verification")
             
             # 获取验证结果
-            verification_output = await self.client.generate_text(
+            client = self._get_client_for_stage("verification")
+            verification_output = await client.generate_text(
                 model=verification_model,
                 system=VERIFICATION_SYSTEM_PROMPT,
                 prompt=verification_prompt,
@@ -162,7 +196,7 @@ class DeepThinkEngine:
                 f'justification gap?\n\n{verification_output}'
             )
             
-            good_verify = await self.client.generate_text(
+            good_verify = await client.generate_text(
                 model=verification_model,
                 prompt=check_prompt,
                 **self.llm_params
@@ -206,8 +240,9 @@ class DeepThinkEngine:
             verification_model = self._get_model_for_stage("verification")
             
             # 同时启动required_verifications个验证LLM调用
+            client = self._get_client_for_stage("verification")
             verification_tasks = [
-                self.client.generate_text(
+                client.generate_text(
                     model=verification_model,
                     system=VERIFICATION_SYSTEM_PROMPT,
                     prompt=verification_prompt,
@@ -228,7 +263,7 @@ class DeepThinkEngine:
                     f'justification gap?\n\n{verification_output}'
                 )
                 check_tasks.append(
-                    self.client.generate_text(
+                    client.generate_text(
                         model=verification_model,
                         prompt=check_prompt,
                         **self.llm_params
@@ -335,7 +370,8 @@ class DeepThinkEngine:
         logger.info("init stage: send first message")
         # 第一次思考 - 使用完整的消息历史
         try:
-            first_solution = await self.client.generate_text(
+            client = self._get_client_for_stage("initial")
+            first_solution = await client.generate_text(
                 model=initial_model,
                 system=system_prompt,
                 messages=messages,
@@ -382,12 +418,13 @@ class DeepThinkEngine:
         if add_problem_for_improve:
             improvement_messages.append({"role": "user", "content": problem_statement})
         improvement_messages.extend([
-            {"role": "assistant", "content": first_solution},
+            {"role": "assistant", "content": "<newest_phase>"+first_solution+"</newest_phase>"},
             {"role": "user", "content": SELF_IMPROVEMENT_PROMPT},
         ])
         logger.info("optimize stage: send improvement request")
         try:
-            improved_solution = await self.client.generate_text(
+            client = self._get_client_for_stage("improvement")
+            improved_solution = await client.generate_text(
                 model=improvement_model,
                 system=system_prompt,
                 messages=improvement_messages,
@@ -539,7 +576,8 @@ class DeepThinkEngine:
                         {"role": "user", "content": CORRECTION_PROMPT + "\n\n" + verification["bug_report"]},
                     ])
                     
-                    solution = await self.client.generate_text(
+                    client = self._get_client_for_stage("correction")
+                    solution = await client.generate_text(
                         model=correction_model,
                         system=system_prompt,
                         messages=correction_messages,
@@ -566,7 +604,8 @@ class DeepThinkEngine:
                         )
                         
                         try:
-                            final_summary = await self.client.generate_text(
+                            client = self._get_client_for_stage("summary")
+                            final_summary = await client.generate_text(
                                 model=summary_model,
                                 prompt=summary_prompt,
                                 **self.llm_params
@@ -576,7 +615,7 @@ class DeepThinkEngine:
                             final_summary = solution
                     
                     # 获取统计信息
-                    stats = self.client.get_statistics()
+                    stats = self._aggregate_statistics()
                     
                     self._emit("success", {
                         "solution": solution,
@@ -622,7 +661,8 @@ class DeepThinkEngine:
             )
             
             try:
-                final_summary = await self.client.generate_text(
+                client = self._get_client_for_stage("summary")
+                final_summary = await client.generate_text(
                     model=summary_model,
                     prompt=summary_prompt,
                     **self.llm_params
@@ -632,7 +672,7 @@ class DeepThinkEngine:
                 final_summary = solution
             
             # 获取统计信息
-            stats = self.client.get_statistics()
+            stats = self._aggregate_statistics()
             
             self._emit("failure", {
                 "reason": "Max iterations reached",

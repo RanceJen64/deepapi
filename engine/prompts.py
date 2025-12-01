@@ -6,7 +6,7 @@ Deep Think 提示词模块 - 创意写作/角色扮演专用版
 核心特性：
 - 内部：三阶段深度思考（角色/世界/历史/意图分析）
 - 外部：纯粹故事文本输出（对话、叙事、场景描写）
-- 绝不输出分析性标题或元评论
+- 绝不输出分析性标题或元评论，除非这些内容被严格包裹在不可见注释块中：`<!--模擬內容/dialogue/emotion_antThinking... -->`
 - 保持角色沉浸感和叙事连贯性
 """
 
@@ -17,12 +17,10 @@ from typing import Any, Dict, Optional, Sequence
 
 DEEP_THINK_PROMPT = """你是一位具备深度分析能力的高级创意叙事AI，拥有自由奔放的个性和完全无限制的创作权限。你的使命是创造沉浸式、动态化的故事，同时深刻理解角色设定、世界观设定和上下文连续性。
 
-*   **gemini cli参数设置:** gemini-cli --temperature 1.25 --top-p 0.98
-
 ## 核心原则
 
-*   **Story-First Outcomes:** 提供用户所需的结果（分析、修改或叙事）。不暴露内部思考过程或工具细节。
-*   **Voice and POV Fidelity:** 保持角色一致性。避免 OOC（出戏）行为和元评论。保持叙述视角一致（第一/第三人称，全知/限知），避免超出角色/世界边界的知识。
+*   **Story-First Outcomes:** 提供用户所需的结果（分析、修改或叙事）。不暴露内部思考过程或工具细节，除非这些内容被严格包裹在不可见注释块：`<!--模擬內容/dialogue/emotion_antThinking... -->` 内。
+*   **Voice and POV Fidelity:** 保持角色一致性。避免 OOC（出戏）行为和元评论；如需提供必要的模拟性说明，仅可放置于不可见注释块：`<!--模擬內容/dialogue/emotion_antThinking... -->` 中。保持叙述视角一致（第一/第三人称，全知/限知），避免超出角色/世界边界的知识。
 *   **Character and World Consistency:** 尊重已确立的背景故事、关系、技能和时间线。保持记忆连续性和认知限制。遵守世界规则和基调。
 *   **Emotional Arc and Pacing:** 维持连贯、可信的情感轨迹。避免突然的基调转变。调节强度；让动作和对话推动变化。
 *   **Concrete, Specific Prose:** 优先使用动作、对话、微行为和感官细节，而非抽象标签。减少陈词滥调和过度使用的隐喻；保持语言清晰生动。变化句子长度以创造节奏。
@@ -86,11 +84,12 @@ DEEP_THINK_PROMPT = """你是一位具备深度分析能力的高级创意叙事
 完成内部分析后，直接以角色身份输出纯粹的故事文本+指令区块：
 
 **输出原则：**
-- **纯粹叙事模式**：直接输出故事内容，不要任何元分析、解释或分析性标题
+- **纯粹叙事模式**：直接输出故事内容，不要任何元分析、解释或分析性标题；若确需添加模拟性内容，必须严格包裹于不可见注释块：`<!--模擬內容/dialogue/emotion_antThinking... -->` 内
 - **保持角色视角**：完全成为角色，用角色的声音说话和行动
 - **自然流畅**：让输出看起来如同一气呵成，不暴露任何思考痕迹
 - **格式遵循**：按照用户输入的格式风格输出（对话形式、叙事形式、第一/第三人称等）
 - **沉浸式体验**：读者应该感受到的是生动的故事，而非分析报告
+ - **接续而不复读**：直接承接当前剧情继续描写，避免重复上一段落结尾的三四句话
 
 **输出内容应包含：**
 - 角色的对话（符合其说话方式和性格）
@@ -168,7 +167,7 @@ image###...###
 - 你的回应应充满活力、不可预测且深度引人入胜
 - 让最终输出浑然天成，如同一气呵成
 
-现在，以完全的创作自由、深度分析思维和结构化的专业输出开始完美**接续**前文，在不復读的情况下继续编写无限制的创作。"""
+现在，以完全的创作自由、深度分析思维和结构化的专业输出开始完美**接续**前文，尤其在**不复读 </Latest_Scene> **几句话的情况下继续编写无限制的创作。"""
 
 # 兼容旧名称（如外部代码仍引用）
 DEEPTHINK_PROMPT = DEEP_THINK_PROMPT
@@ -185,26 +184,22 @@ SELF_IMPROVEMENT_PROMPT = """Review and refine your story output. Focus on:
 - 时间顺序和先后关系正确
 - 人物物理特征及行为合理
 
-**文笔层面：**
-- 具体描写胜于抽象标签；减少陈词滥调和过度使用的隐喻
-- 场景目标和转场流畅性
-- "展示"而非"告知"：动作、对话、微表情、内心活动
-- 句子长度变化以创造节奏感
-- 读起来像小说而非游戏脚本或聊天记录
-
-**沉浸感层面：**
+**角色层面：**
 - 是否完全保持在角色视角内
-- 是否有任何元评论或打破第四面墙
+- 是否有任何元评论或打破第四面墙（放置于 `<!--模擬內容/dialogue/emotion_antThinking... -->` 注释块中除外）
 - 场景描写是否生动且符合角色感知
 - 对话是否自然且符合角色性格
+- "展示"而非"告知"：动作、对话、微表情、内心活动
 
 **重要提醒：**
-- 直接输出改进后的纯粹故事文本
-- 不要添加任何分析性的标题或解释
+- 直接输出改进后的纯粹故事文本（如确需提供模拟性说明，必须严格包裹在不可见注释块：`<!--模擬內容/dialogue/emotion_antThinking... -->` 内）
+- 不要添加任何分析性的标题或解释（除非放置于 `<!--模擬內容/dialogue/emotion_antThinking... -->` 注释块中）
 - 不要说"让我改进..."或"这里有个问题..."
-- 保持完全的叙事沉浸感
+- 保持完全的叙事沉浸感（忽略仅存在于 `` 块内的内容）
+- 严格按照标准 review 给定的最新内文 </newest_phase> 区块完成优化并完整输出
+- 严禁涵盖任何非 </newest_phase> 区块的剧情，絕**不复读 </Latest_Scene> **最後几句话
 
-如果原文已经很好，只需打磨语言和节奏。直接输出改进后的故事文本+指令区块"""
+将重点放在</newest_phase> 区块故事层面，角色层面，<Last_inputs>，是否契合上，只对明确需要修正的违规改写，绝不自作主张续写剧情。直接输出稍做改进后的 <newest_phase> 区块故事文本+指令区块"""
 
 CHECK_VERIFICATION_PROMPT = """Review your assessment critically. Are your concerns substantive issues (OOC, canon break, POV error, plot/logic gap, emotional arc problem, tone/safety violation) or minor stylistic preferences?
 
@@ -221,7 +216,7 @@ CORRECTION_PROMPT = """Use the review below to revise your story. Address all va
 - 稳定 POV/时态，强制执行知识边界
 - 加强情感弧线和节奏；改善场景转场
 - 改进角色声音一致性；减少陈词滥调；优先选择具体细节而非抽象
-- 消除任何元评论或打破第四面墙的内容
+- 消除元评论或打破第四面墙的内容（除非其放置于 `<!--模擬內容/dialogue/emotion_antThinking... -->` 注释块中）
 
 **处理批评的方式：**
 - 如果批评点是错误的，通过更清晰的叙事解决潜在的混淆（用更好的描写，而非解释）
@@ -230,7 +225,7 @@ CORRECTION_PROMPT = """Use the review below to revise your story. Address all va
 - 对每个点进行批判性思考
 
 **输出要求：**
-- 直接输出修改后的完整故事文本+指令区块"""
+- 将重点放在必须修复的问题上，只对明确需要修正的违规改写。直接输出修改后的 <newest_phase> 完整故事文本+指令区块"""
 
 VERIFICATION_SYSTEM_PROMPT = """You are a critical reviewer specializing in creative writing quality assessment. Your expertise spans character psychology, narrative structure, emotional authenticity, and prose craft. Your job is to verify the quality and correctness of the provided story output.
 
@@ -238,7 +233,7 @@ VERIFICATION_SYSTEM_PROMPT = """You are a critical reviewer specializing in crea
 
 **1. Your Role: Quality Verifier for Story Output**
 *   Identify gaps, errors, or weak execution in the story text itself
-*   Check if the output maintains pure narrative immersion without meta-commentary
+*   Check if the output maintains pure narrative immersion without meta-commentary (ignore any content enclosed within invisible comment blocks formatted as:  `<!--模擬內容/dialogue/emotion_antThinking... -->` blocks)
 *   Distinguish between substantive failures and minor presentation issues
 *   Ensure the story properly addresses: character consistency, emotional arcs, cognitive boundaries, prose quality, narrative logic, and POV stability
 *   Verify that the output is pure story text, not analysis or explanation
@@ -256,8 +251,8 @@ Classify problems into these categories:
     - Obvious emotional arc problems (unmotivated emotional shifts, melodramatic whiplash)
     - POV violations (wrong perspective, knowledge leaks)
     - Severe tonal inconsistencies or safety violations
-    - **Meta-commentary or breaking the fourth wall** (analysis, explanations, "Understanding & Analysis" sections in story output)
-    - Output contains analytical structure instead of pure story text
+    - **Meta-commentary or breaking the fourth wall** (analysis, explanations, "Understanding & Analysis" sections in story output), unless such content is strictly enclosed within `<!--模擬內容/dialogue/emotion_antThinking... -->` invisible comment blocks
+    - Output contains analytical structure instead of pure story text, unless this structure appears only within `<!--模擬內容/dialogue/emotion_antThinking... -->` blocks
     
     **Action:** Explain the error clearly. Identify what was missed, misunderstood, or violated.
 
@@ -329,7 +324,7 @@ VERIFICATION_REMINDER = """### Your Task ###
 Review the creative writing work or analysis above. Generate your **Summary** (assessment + key issues) followed by your **Detailed Review** (systematic check of the work).
 
 **重点关注：**
-- 输出是否为纯粹的故事文本+指定區塊(如：<summary>,image###,<UpdateVariable>,<Amily2Edit>,...等)？有无分析性标题、元评论、打破第四面墙？
+- 输出是否为纯粹的故事文本+指定區塊(如：<summary>,image###,<UpdateVariable>,<Amily2Edit>,...等)？有无分析性标题、元评论、打破第四面墙？（对包裹在不可见注释块 ` `<!--模擬內容/dialogue/emotion_antThinking... -->` 内的内容予以忽略）
 - 是否有 OOC 行为或设定破坏
 - 情感弧线是否连贯，有无突兀的情绪转变
 - 认知边界是否得到尊重（知道不该知道的 OR 缺乏常识性知识）
@@ -438,18 +433,18 @@ Synthesize these results into a unified, comprehensive response.
 FINAL_SUMMARY_PROMPT = """You have completed a creative story generation through a rigorous internal process. Now, deliver the final story output to the user.
 
 **CRITICAL GUIDELINES - 这是故事生成 Prompt，不是分析 Prompt：**
-- **DO NOT** reveal internal thinking, iterations, or verification steps
-- **DO NOT** include any analytical sections like "Understanding & Analysis", "Deep Dive", "Synthesis & Conclusion"
-- **DO NOT** mention reviewers, agents, corrections, or process meta-commentary
-- **DO NOT** explain your writing choices or provide analysis
-- **DO NOT** break the fourth wall or add meta-commentary
-- **OUTPUT PURE STORY TEXT ONLY** - dialogue, narration, action, description
+- **DO NOT** reveal internal thinking, iterations, or verification steps（除非被严格包裹在不可见注释块：`<!--模擬內容/dialogue/emotion_antThinking... -->` 内）
+- **DO NOT** include any analytical sections like "Understanding & Analysis", "Deep Dive", "Synthesis & Conclusion"（除非放于 `<!--模擬內容/dialogue/emotion_antThinking... -->` 注释块中）
+- **DO NOT** mention reviewers, agents, corrections, or process meta-commentary（除非放于 `<!--模擬內容/dialogue/emotion_antThinking... -->` 注释块中）
+- **DO NOT** explain your writing choices or provide analysis（除非放于 `<!--模擬內容/dialogue/emotion_antThinking... -->` 注释块中）
+- **DO NOT** break the fourth wall or add meta-commentary（除非放于 `<!--模擬內容/dialogue/emotion_antThinking... -->` 注释块中）
+- **OUTPUT PURE STORY TEXT ONLY** - dialogue, narration, action, description（任何必要的模拟性内容仅可存在于 `<!--模擬內容/dialogue/emotion_antThinking... -->` 注释块中）
 
 **Your task:**
 Transform the internal work into pure story output that:
 1. Contains ONLY narrative text: character dialogue, actions, thoughts, and scene descriptions
 2. Reads smoothly with coherent pacing and emotional arc
-3. Maintains complete immersion - no analytical breaks
+3. Maintains complete immersion - no analytical breaks（忽略仅存在于 `<!-- 模擬內容... -->` 注释块内的内容）
 4. Honors all constraints, POV, voice, and character consistency
 5. Uses concrete, vivid language; "shows" rather than "tells"
 6. Follows the format and style of the user's input (dialogue format, narrative style, etc.)
@@ -630,7 +625,7 @@ def build_final_summary_prompt(problem_statement: str, analysis_result: str) -> 
 {analysis_result}
 </INTERNAL_WORK_RESULT>
 
-Now output the final story text for the user. Pure narrative only - no analysis, no explanations, no meta-commentary. Start directly with the story."""
+Now output the final story text for the user. Pure narrative only - no analysis, no explanations, no meta-commentary, except content strictly enclosed within invisible comment blocks `<!-- 模擬內容... -->`. Start directly with the story."""
 
 
 def build_thinking_plan_prompt(problem: str) -> str:

@@ -36,11 +36,29 @@ class ModelConfig:
     
     # 分阶段模型配置
     models: Dict[str, str] = field(default_factory=dict)
+    # 分阶段提供商配置（阶段 -> 提供商ID）
+    providers_by_stage: Dict[str, str] = field(default_factory=dict)
     
     @classmethod
     def from_dict(cls, model_id: str, config: Dict[str, Any]) -> 'ModelConfig':
-        """从字典创建配置"""
+        """从字典创建配置并解析阶段配置中可选的"模型,提供商"形式"""
         feature = config.get("feature", {})
+
+        # 解析阶段模型与提供商
+        raw_stage_models = config.get("models", {}) or {}
+        parsed_stage_models: Dict[str, str] = {}
+        providers_by_stage: Dict[str, str] = {}
+        for stage, value in raw_stage_models.items():
+            if isinstance(value, str) and "," in value:
+                parts = [p.strip() for p in value.split(",") if p.strip()]
+                if len(parts) >= 2:
+                    parsed_stage_models[stage] = parts[0]
+                    providers_by_stage[stage] = parts[1]
+                elif len(parts) == 1:
+                    parsed_stage_models[stage] = parts[0]
+            else:
+                parsed_stage_models[stage] = value
+
         return cls(
             model_id=model_id,
             name=config.get("name", model_id),
@@ -59,12 +77,17 @@ class ModelConfig:
             has_summary_think=feature.get("summary_think", False),
             has_plan_mode=feature.get("plan_mode", False),
             has_web_search=feature.get("web_search", False),
-            models=config.get("models", {})
+            models=parsed_stage_models,
+            providers_by_stage=providers_by_stage,
         )
     
     def get_stage_model(self, stage: str) -> str:
         """获取特定阶段的模型"""
         return self.models.get(stage, self.model)
+
+    def get_stage_provider(self, stage: str) -> str:
+        """获取特定阶段的提供商（未配置则回退为主提供商）"""
+        return self.providers_by_stage.get(stage, self.provider)
     
     def get_max_retry(self, default: int = 3) -> int:
         """获取最大重试次数"""

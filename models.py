@@ -51,7 +51,7 @@ class ChatCompletionRequest(BaseModel):
     """聊天补全请求"""
     model: str
     messages: List[Message]
-    temperature: Optional[float] = 1.0
+    temperature: Optional[float] = 0.7
     top_p: Optional[float] = 1.0
     n: Optional[int] = 1
     stream: Optional[bool] = False

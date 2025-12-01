@@ -282,9 +282,19 @@ async def stream_chat_completion(
                 "content": msg.content
             })
     
-    # 创建后端客户端 - 传入RPM限制和重试次数，将在每次调用后端API时进行限流
+    # 创建后端客户端集合（支持每个阶段选择不同提供商）
     max_retry = model_config.get_max_retry(default=config.max_retry)
-    client = create_client(provider_config.base_url, provider_config.key, model_config.rpm, max_retry)
+    provider_ids = {model_config.provider}
+    if hasattr(model_config, 'providers_by_stage') and model_config.providers_by_stage:
+        provider_ids.update([pid for pid in model_config.providers_by_stage.values() if pid])
+    clients_by_provider = {}
+    for pid in provider_ids:
+        pc = config.get_provider(pid)
+        if not pc:
+            raise HTTPException(status_code=500, detail=f"Provider {pid} not configured")
+        clients_by_provider[pid] = create_client(pc.base_url, pc.key, model_config.rpm, max_retry, pc.response_api)
+    # 默认客户端
+    client = clients_by_provider[model_config.provider]
     
     # 不再直接注入提示词，而是通过标志传递给引擎
     # 引擎会在正确的时机执行 Ask 和 Plan 阶段
@@ -313,6 +323,9 @@ async def stream_chat_completion(
             model_stages=model_config.models,
             enable_parallel_check=model_config.parallel_check,
             llm_params=llm_params,
+            clients_by_provider=clients_by_provider,
+            default_provider_id=model_config.provider,
+            provider_stages=getattr(model_config, 'providers_by_stage', {}),
         )
     else:  # deepthink
         # DeepThink 模式
@@ -327,6 +340,9 @@ async def stream_chat_completion(
             enable_planning=model_config.has_plan_mode,
             enable_parallel_check=model_config.parallel_check,
             llm_params=llm_params,
+            clients_by_provider=clients_by_provider,
+            default_provider_id=model_config.provider,
+            provider_stages=getattr(model_config, 'providers_by_stage', {}),
         )
     
     # 使用统一的流式处理函数
@@ -421,9 +437,19 @@ async def chat_completions(
                     "content": msg.content
                 })
         
-        # 创建后端客户端 - 传入RPM限制和重试次数，将在每次调用后端API时进行限流
+        # 创建后端客户端集合（支持每个阶段选择不同提供商）
         max_retry = model_config.get_max_retry(default=config.max_retry)
-        client = create_client(provider_config.base_url, provider_config.key, model_config.rpm, max_retry)
+        provider_ids = {model_config.provider}
+        if hasattr(model_config, 'providers_by_stage') and model_config.providers_by_stage:
+            provider_ids.update([pid for pid in model_config.providers_by_stage.values() if pid])
+        clients_by_provider = {}
+        for pid in provider_ids:
+            pc = config.get_provider(pid)
+            if not pc:
+                raise HTTPException(status_code=500, detail=f"Provider {pid} not configured")
+            clients_by_provider[pid] = create_client(pc.base_url, pc.key, model_config.rpm, max_retry, pc.response_api)
+        # 默认客户端
+        client = clients_by_provider[model_config.provider]
         
         # 根据模型级别处理
         reasoning_text = None
@@ -440,6 +466,9 @@ async def chat_completions(
                 model_stages=model_config.models,
                 enable_parallel_check=model_config.parallel_check,
                 llm_params=llm_params,
+                clients_by_provider=clients_by_provider,
+                default_provider_id=model_config.provider,
+                provider_stages=getattr(model_config, 'providers_by_stage', {}),
             )
             result = await engine.run()
             response_text = result.summary or result.final_solution
@@ -460,6 +489,9 @@ async def chat_completions(
                 enable_planning=model_config.has_plan_mode,
                 enable_parallel_check=model_config.parallel_check,
                 llm_params=llm_params,
+                clients_by_provider=clients_by_provider,
+                default_provider_id=model_config.provider,
+                provider_stages=getattr(model_config, 'providers_by_stage', {}),
             )
             result = await engine.run()
             #response_text = result.summary or result.final_solution

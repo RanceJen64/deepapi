@@ -45,6 +45,10 @@ class UltraThinkEngine:
         on_agent_update: Optional[Callable[[str, Dict[str, Any]], None]] = None,
         enable_parallel_check: bool = False,
         llm_params: Optional[Dict[str, Any]] = None,
+        # 新增：按提供商路由的客户端与阶段提供商映射
+        clients_by_provider: Optional[Dict[str, OpenAIClient]] = None,
+        default_provider_id: Optional[str] = None,
+        provider_stages: Optional[Dict[str, str]] = None,
     ):
         self.client = client
         self.model = model
@@ -64,10 +68,20 @@ class UltraThinkEngine:
         self.enable_parallel_check = enable_parallel_check
         self.sources: List[Source] = []
         self.llm_params = llm_params or {}
+        # 多提供商支持
+        self.clients_by_provider = clients_by_provider or {}
+        self.default_provider_id = default_provider_id
+        self.provider_stages = provider_stages or {}
     
     def _get_model_for_stage(self, stage: str) -> str:
         """获取特定阶段的模型"""
         return self.model_stages.get(stage, self.model)
+
+    def _get_client_for_stage(self, stage: str) -> OpenAIClient:
+        provider_id = self.provider_stages.get(stage, self.default_provider_id)
+        if provider_id and provider_id in self.clients_by_provider:
+            return self.clients_by_provider[provider_id]
+        return self.client
     
     def _emit(self, event_type: str, data: Dict[str, Any]):
         """发送进度事件"""
@@ -87,7 +101,8 @@ class UltraThinkEngine:
         messages.append({"role": "user", "content": problem_statement})
         
         # 使用完整的消息历史生成计划
-        plan = await self.client.generate_text(
+        client = self._get_client_for_stage("planning")
+        plan = await client.generate_text(
             model=planning_model,
             messages=messages,
             **self.llm_params
@@ -103,7 +118,8 @@ class UltraThinkEngine:
         
         try:
             # 尝试使用结构化输出
-            result = await self.client.generate_object(
+            client = self._get_client_for_stage("agent_config")
+            result = await client.generate_object(
                 model=agent_config_model,
                 prompt=GENERATE_AGENT_PROMPTS_PROMPT.replace("{plan}", plan),
                 response_format={"type": "json_object"},
@@ -122,7 +138,7 @@ class UltraThinkEngine:
         
         except Exception as e:
             # 回退到文本解析
-            text = await self.client.generate_text(
+            text = await client.generate_text(
                 model=agent_config_model,
                 prompt=GENERATE_AGENT_PROMPTS_PROMPT.replace("{plan}", plan),
                 **self.llm_params
@@ -210,6 +226,9 @@ class UltraThinkEngine:
                 on_progress=agent_progress_handler,
                 enable_parallel_check=self.enable_parallel_check,
                 llm_params=self.llm_params,
+                clients_by_provider=self.clients_by_provider,
+                default_provider_id=self.default_provider_id,
+                provider_stages=self.provider_stages,
             )
             
             deep_think_result = await engine.run()
@@ -345,6 +364,9 @@ Please analyze all approaches, identify the best insights from each, resolve any
                 on_progress=synthesis_progress_handler,
                 enable_parallel_check=self.enable_parallel_check,
                 llm_params=self.llm_params,
+                clients_by_provider=self.clients_by_provider,
+                default_provider_id=self.default_provider_id,
+                provider_stages=self.provider_stages,
             )
             
             synthesis_result = await synthesis_engine.run()
@@ -364,7 +386,8 @@ Please analyze all approaches, identify the best insights from each, resolve any
                 synthesis
             )
             
-            final_summary = await self.client.generate_text(
+            client = self._get_client_for_stage("summary")
+            final_summary = await client.generate_text(
                 model=summary_model,
                 prompt=summary_prompt,
                 **self.llm_params
